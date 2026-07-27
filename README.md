@@ -18,7 +18,7 @@
 
 # Use
 
-Right-click a message with an image or video attachment. Apps > To GIF. Follow the public conversion updates in the channel.
+Right-click a message with an image or video attachment. Apps > To GIF. The final GIF is the only message posted.
 
 # Notes
 
@@ -27,10 +27,10 @@ Source attachments are downloaded to the project-local `temp/` directory and
 removed after each conversion. `temp/` is excluded from Git.
 GIF attachments are not reconverted. Video attachments are converted through
 FFmpeg at 15 FPS using a generated color palette.
-The public response reports download, inspection, conversion, retry, and
-upload stages with elapsed time and an ETA that refreshes every two seconds.
-For videos, the ETA is recalculated from FFmpeg's processing position and
-speed. Before conversion, the bot estimates the GIF size from source metadata and
+Only a successfully converted GIF is posted to Discord. Download, inspection,
+conversion, retry, and ETA updates are logged to the server console every two
+seconds. For videos, the ETA is recalculated from FFmpeg's processing position
+and speed. Before conversion, the bot estimates the GIF size from source metadata and
 precalculates a starting resolution to target a 10 MB GIF. GIFs over 10 MB are
 retried at lower resolutions.
 No gateway connection, no persistent bot process needed.

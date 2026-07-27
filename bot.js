@@ -261,9 +261,9 @@ function probeVideo(sourcePath) {
   });
 }
 
-async function uploadGif(editUrl, gifBuffer, content) {
+async function uploadGif(editUrl, gifBuffer) {
   const form = new FormData();
-  form.append('payload_json', JSON.stringify({ content }));
+  form.append('payload_json', JSON.stringify({ content: '' }));
   form.append('file', new Blob([gifBuffer], { type: 'image/gif' }), 'converted.gif');
 
   const response = await fetch(editUrl, { method: 'PATCH', body: form });
@@ -282,19 +282,18 @@ function isAttachmentTooLarge(error) {
     || /too large/i.test(error.responseBody || '');
 }
 
-async function updateProgress(editUrl, content) {
+async function updateProgress(_editUrl, content) {
   console.log(`[conversion] ${content.replace('\n', ' | ')}`);
+}
+
+async function deleteOriginalResponse(editUrl) {
   try {
-    const response = await fetch(editUrl, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
-    if (!response.ok) {
-      console.warn(`[conversion] Could not update progress (${response.status}).`);
+    const response = await fetch(editUrl, { method: 'DELETE' });
+    if (!response.ok && response.status !== 404) {
+      console.warn(`[conversion] Could not remove deferred response (${response.status}).`);
     }
   } catch (error) {
-    console.warn(`[conversion] Could not update progress: ${error.message}`);
+    console.warn(`[conversion] Could not remove deferred response: ${error.message}`);
   }
 }
 
@@ -345,7 +344,7 @@ async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress) 
     try {
       await progress.update('Uploading GIF…', 3);
       await progress.pause();
-      await uploadGif(editUrl, gifBuffer, `GIF ready — completed in ${formatDuration(progress.elapsedSeconds())}.`);
+      await uploadGif(editUrl, gifBuffer);
       console.log(`[conversion] Video GIF uploaded in ${formatDuration(progress.elapsedSeconds())}.`);
       return;
     } catch (error) {
@@ -393,7 +392,7 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress) 
   while (true) {
     try {
       await progress.pause();
-      await uploadGif(editUrl, gifBuffer, `GIF ready — completed in ${formatDuration(progress.elapsedSeconds())}.`);
+      await uploadGif(editUrl, gifBuffer);
       console.log(`[conversion] Image GIF uploaded in ${formatDuration(progress.elapsedSeconds())}.`);
       return;
     } catch (error) {
@@ -427,7 +426,7 @@ async function convertAndUpload(token, sourceUrl, isVideo) {
     }
   } catch (error) {
     console.error('[conversion] Conversion failed:', error);
-    await progress.update(`Conversion failed: ${error.message}`.slice(0, 2000));
+    await deleteOriginalResponse(editUrl);
   } finally {
     await progress.stop();
     if (sourcePath) {
@@ -455,12 +454,12 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
     const attachment = attachments.find((candidate) => !isGifAttachment(candidate));
 
     if (!attachment) {
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          content: attachments.length ? 'That attachment is already a GIF.' : 'No attachment on that message.',
-        },
+      res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+      setImmediate(() => {
+        const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
+        deleteOriginalResponse(editUrl);
       });
+      return;
     }
 
     console.log('[interaction] Deferring conversion response.');
@@ -473,9 +472,10 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
     return;
   }
 
-  res.send({
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: { content: 'Unsupported interaction.' },
+  res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  setImmediate(() => {
+    const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${interaction.token}/messages/@original`;
+    deleteOriginalResponse(editUrl);
   });
 });
 
