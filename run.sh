@@ -28,4 +28,4 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 echo "Starting with Docker Compose..."
-docker compose up --build
+docker compose up --build -d

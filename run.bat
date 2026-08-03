@@ -64,5 +64,4 @@ if errorlevel 1 (
 
 echo Starting with Docker Compose...
 
-docker compose up --build
-
+docker compose up --build -d

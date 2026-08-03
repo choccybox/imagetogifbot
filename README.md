@@ -49,8 +49,10 @@ or run locally with `node .`.
    ```
 
 The Compose file uses Docker's built-in `bridge` network instead of creating a
-project network. The bot is published on `127.0.0.1:8787`, and the Cloudflared
-container reaches it through Docker's `host.docker.internal` gateway.
+project network. The bot publishes port `8787` on the host, so it is reachable
+from `http://localhost:8787` and from your LAN IP, such as
+`http://192.168.100.33:8787`. The Cloudflared container reaches it through
+Docker's `host.docker.internal` gateway.
 
 ### 4. Configure environment variables
 
