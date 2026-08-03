@@ -3,6 +3,25 @@
 Converts a message attachment to a GIF. The bot posts only the completed GIF;
 conversion progress and errors are logged by the container.
 
+## Quick start
+
+Windows PowerShell/CMD:
+
+```powershell
+.\run.bat
+```
+
+macOS/Linux/Git Bash:
+
+```sh
+sh ./run.sh
+```
+
+The script runs `npm install` to install packages and create/update
+`package-lock.json`. If Docker Compose is available, it starts the stack with
+`docker compose up --build`. If Docker is missing, it tells you to install Docker
+or run locally with `node .`.
+
 ## Run with Docker and Cloudflare Tunnel
 
 ### 1. Prerequisites
