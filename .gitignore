@@ -3,4 +3,3 @@ temp
 .env
 .git
 npm-debug.log
-package-lock.json
