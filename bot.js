@@ -3,7 +3,7 @@ const express = require('express');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { createWriteStream } = require('node:fs');
-const { mkdir, rm, stat } = require('node:fs/promises');
+const { chmod, mkdir, rm, stat } = require('node:fs/promises');
 const { join } = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -147,8 +147,17 @@ function createProgressReporter(editUrl) {
   };
 }
 
+async function ensureTempDir() {
+  await mkdir(TEMP_DIR, { recursive: true, mode: 0o777 });
+  try {
+    await chmod(TEMP_DIR, 0o777);
+  } catch (error) {
+    console.warn(`[conversion] Could not chmod temp directory: ${error.message}`);
+  }
+}
+
 async function downloadAttachment(sourceUrl) {
-  await mkdir(TEMP_DIR, { recursive: true });
+  await ensureTempDir();
   const sourcePath = join(TEMP_DIR, randomUUID());
 
   try {

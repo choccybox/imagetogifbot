@@ -120,7 +120,8 @@ GIF.
 
 - Source files are streamed to the project-local `temp/` directory and removed
   after conversion. The Compose file mounts that directory into the bot
-  container.
+  container. The bot container runs as root so it can write to that bind mount
+  reliably on Windows Docker Desktop.
 - The Docker image includes FFmpeg and FFprobe for video conversion.
 - GIFs target a maximum size of 10 MB; the bot estimates a starting resolution
   before conversion and retries at lower resolutions when needed.

@@ -4,6 +4,7 @@ services:
     env_file:
       - .env
     network_mode: bridge
+    user: "0:0"
     ports:
       - "8787:8787"
     restart: unless-stopped
