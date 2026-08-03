@@ -45,11 +45,12 @@ or run locally with `node .`.
 5. Set the service type to **HTTP** and the service URL to:
 
    ```text
-   http://bot:8787
+   http://host.docker.internal:8787
    ```
 
-`bot` is the Compose service name, which Cloudflared resolves on Docker's
-internal network.
+The Compose file uses Docker's built-in `bridge` network instead of creating a
+project network. The bot is published on `127.0.0.1:8787`, and the Cloudflared
+container reaches it through Docker's `host.docker.internal` gateway.
 
 ### 4. Configure environment variables
 

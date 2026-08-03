@@ -3,6 +3,9 @@ services:
     build: .
     env_file:
       - .env
+    network_mode: bridge
+    ports:
+      - "127.0.0.1:8787:8787"
     restart: unless-stopped
     volumes:
       - ./temp:/app/temp
@@ -10,6 +13,9 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?Set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    network_mode: bridge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - bot
     restart: unless-stopped
