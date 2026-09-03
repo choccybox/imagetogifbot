@@ -2,8 +2,8 @@ require('dotenv').config();
 const express = require('express');
 const { randomInt, randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { createWriteStream } = require('node:fs');
-const { chmod, mkdir, rm, stat, writeFile } = require('node:fs/promises');
+const { createWriteStream, statSync } = require('node:fs');
+const { chmod, mkdir, readFile, rm, stat, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -135,66 +135,19 @@ function estimateVideoConversionSeconds(metadata) {
   return Math.max(5, Math.ceil(metadata.duration * Math.max(0.3, megapixelFactor * 0.5)));
 }
 
-function createProgressReporter(editUrl) {
+function createProgressReporter() {
   const startedAt = Date.now();
-  let stage;
-  let remainingEtaSeconds;
-  let etaUpdatedAt;
-  let interval;
-  let currentUpdate;
-
-  const elapsedSeconds = () => (Date.now() - startedAt) / 1000;
-
-  const currentEtaSeconds = () => {
-    if (!Number.isFinite(remainingEtaSeconds)) return null;
-    return Math.max(0, remainingEtaSeconds - (Date.now() - etaUpdatedAt) / 1000);
-  };
-
-  const sendCurrentProgress = () => {
-    if (!stage) return Promise.resolve();
-    if (currentUpdate) return currentUpdate;
-
-    const remaining = currentEtaSeconds();
-    const eta = remaining === null ? '' : ` • ETA: ~${formatDuration(remaining)}`;
-    const content = `${stage}\nElapsed: ${formatDuration(elapsedSeconds())}${eta}`;
-    currentUpdate = updateProgress(editUrl, content).finally(() => {
-      currentUpdate = undefined;
-    });
-    return currentUpdate;
-  };
-
-  const pause = async () => {
-    if (interval) {
-      clearInterval(interval);
-      interval = undefined;
-    }
-    await currentUpdate;
-  };
 
   return {
-    elapsedSeconds,
-    async update(nextStage, etaSeconds) {
-      await pause();
-      stage = nextStage;
-      remainingEtaSeconds = etaSeconds;
-      etaUpdatedAt = Date.now();
-      if (Number.isFinite(etaSeconds)) {
-        interval = setInterval(() => {
-          void sendCurrentProgress();
-        }, 2000);
-      }
-      await sendCurrentProgress();
+    elapsedSeconds() {
+      return (Date.now() - startedAt) / 1000;
     },
-    setEta(etaSeconds) {
-      if (!Number.isFinite(etaSeconds)) return;
-      remainingEtaSeconds = Math.max(0, etaSeconds);
-      etaUpdatedAt = Date.now();
+    async update(stage) {
+      console.log(`[conversion] ${stage}`);
     },
-    pause,
-    async stop() {
-      await pause();
-      stage = undefined;
-    },
+    setEta() {},
+    async pause() {},
+    async stop() {},
   };
 }
 
@@ -257,7 +210,7 @@ function extractVideoFrame(sourcePath, timestamp) {
   });
 }
 
-async function requestVisionName(frames) {
+async function requestVisionName(frames, avoidNames = []) {
   if (!process.env.OPENROUTER_API_KEY) return null;
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -277,7 +230,7 @@ async function requestVisionName(frames) {
         content: [
           {
             type: 'text',
-            text: 'Identify up to five highly distinctive visual features in this frame. Focus on unusual objects, symbols, creatures, landmarks, actions, or props that make this image recognizable. Ignore generic people, faces, hair, beards, clothing, colors, body parts, common poses, emotions, backgrounds, captions, logos, and text overlays. Return only up to five concise lowercase single-word tags separated by spaces. Do not write a sentence or explanation. At least three tags are preferred because the first three valid tags become a filename.',
+            text: `Identify up to five highly distinctive visual features in this frame. Focus on unusual objects, symbols, creatures, landmarks, actions, or props that make this image recognizable. Ignore generic people, faces, hair, beards, clothing, colors, body parts, common poses, emotions, backgrounds, captions, logos, and text overlays. Return only up to five concise lowercase single-word tags separated by spaces. Do not write a sentence or explanation. At least three tags are preferred because the first three valid tags become a filename.${avoidNames.length ? ` Do not use any words from these rejected names: ${avoidNames.join(', ')}.` : ''}`, 
           },
           ...frames.map((frame) => ({
             type: 'image_url',
@@ -296,7 +249,7 @@ async function requestVisionName(frames) {
   return normalizeGifName(typeof content === 'string' ? content : '');
 }
 
-async function createGifName(sourcePath, isVideo, metadata) {
+async function createGifName(sourcePath, isVideo, metadata, avoidNames = []) {
   if (process.env.OPENROUTER_API_KEY) {
     try {
       let frames;
@@ -308,8 +261,8 @@ async function createGifName(sourcePath, isVideo, metadata) {
         frames = [frame];
       }
 
-      const visionName = await requestVisionName(frames);
-      if (visionName) {
+      const visionName = await requestVisionName(frames, avoidNames);
+      if (visionName && !avoidNames.includes(visionName)) {
         console.log(`[conversion] Vision model suggested GIF name: ${visionName}.`);
         return visionName;
       }
@@ -342,6 +295,11 @@ async function savePermanentGif(gifBuffer, preferredName) {
         url: `${PUBLIC_BASE_URL}/gifs/${slug}.gif`,
       };
     } catch (error) {
+      if (error.code === 'EEXIST' && preferredSlug && attempt === 0) {
+        const collision = new Error(`GIF name already exists: ${preferredSlug}.`);
+        collision.code = 'GIF_NAME_COLLISION';
+        throw collision;
+      }
       if (error.code !== 'EEXIST') throw error;
     }
   }
@@ -358,6 +316,7 @@ async function createGif(sourcePath, width, height) {
 
 function createVideoGif(sourcePath, scale, onProgress) {
   const dimensions = `max(2\\,trunc(iw*${scale}/2)*2):max(2\\,trunc(ih*${scale}/2)*2)`;
+  const outputPath = join(TEMP_DIR, `${randomUUID()}.gif`);
   const filters = [
     `[0:v]fps=${VIDEO_FPS},scale=${dimensions}:flags=lanczos,split[frames][palette_input]`,
     '[palette_input]palettegen=stats_mode=diff[palette]',
@@ -374,13 +333,29 @@ function createVideoGif(sourcePath, scale, onProgress) {
       '-filter_complex', filters,
       '-loop', '0',
       '-f', 'gif',
-      'pipe:1',
+      '-y', outputPath,
     ]);
-    const output = [];
     const errors = [];
+    let lastReportedSize = -1;
+    let exceededLimit = false;
+    const sizeMonitor = setInterval(() => {
+      try {
+        const currentSize = statSync(outputPath).size;
+        if (currentSize !== lastReportedSize) {
+          lastReportedSize = currentSize;
+          console.log(`[conversion] Current GIF size: ${formatBytes(currentSize)}.`);
+        }
+        if (currentSize > TARGET_GIF_BYTES && !exceededLimit) {
+          exceededLimit = true;
+          console.warn(`[conversion] GIF exceeded ${formatBytes(TARGET_GIF_BYTES)} at ${formatBytes(currentSize)}; stopping FFmpeg.`);
+          ffmpeg.kill('SIGKILL');
+        }
+      } catch (error) {
+        if (error.code !== 'ENOENT') console.warn(`[conversion] Could not inspect GIF size: ${error.message}`);
+      }
+    }, 50);
 
     let progressOutput = '';
-    ffmpeg.stdout.on('data', (chunk) => output.push(chunk));
     ffmpeg.stderr.on('data', (chunk) => {
       errors.push(chunk);
       progressOutput += chunk.toString();
@@ -392,14 +367,40 @@ function createVideoGif(sourcePath, scale, onProgress) {
       }
     });
     ffmpeg.on('error', (error) => reject(new Error(`Could not start FFmpeg: ${error.message}`)));
-    ffmpeg.on('close', (code) => {
-      if (code === 0) {
-        resolve(Buffer.concat(output));
-        return;
-      }
+    ffmpeg.on('close', async (code) => {
+      clearInterval(sizeMonitor);
+      try {
+        if (exceededLimit) {
+          const error = new Error(`GIF exceeded ${formatBytes(TARGET_GIF_BYTES)}.`);
+          error.code = 'GIF_TOO_LARGE';
+          error.size = lastReportedSize;
+          await rm(outputPath, { force: true });
+          reject(error);
+          return;
+        }
 
-      const message = Buffer.concat(errors).toString().trim() || `FFmpeg exited with code ${code}.`;
-      reject(new Error(`Video conversion failed: ${message}`));
+        if (code === 0) {
+          const gifBuffer = await readFile(outputPath);
+          await rm(outputPath, { force: true });
+          console.log(`[conversion] Current GIF size: ${formatBytes(gifBuffer.length)}.`);
+          if (gifBuffer.length > TARGET_GIF_BYTES) {
+            const error = new Error(`GIF exceeded ${formatBytes(TARGET_GIF_BYTES)}.`);
+            error.code = 'GIF_TOO_LARGE';
+            error.size = gifBuffer.length;
+            reject(error);
+            return;
+          }
+          resolve(gifBuffer);
+          return;
+        }
+
+        const message = Buffer.concat(errors).toString().trim() || `FFmpeg exited with code ${code}.`;
+        await rm(outputPath, { force: true });
+        reject(new Error(`Video conversion failed: ${message}`));
+      } catch (error) {
+        await rm(outputPath, { force: true });
+        reject(error);
+      }
     });
   });
 }
@@ -441,8 +442,28 @@ function probeVideo(sourcePath) {
   });
 }
 
-async function publishGifLink(editUrl, gifBuffer, preferredName) {
-  const savedGif = await savePermanentGif(gifBuffer, preferredName);
+async function publishGifLink(editUrl, gifBuffer, preferredName, createAlternativeName) {
+  const usedNames = [preferredName];
+  let name = preferredName;
+  let savedGif;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      savedGif = await savePermanentGif(gifBuffer, name);
+      break;
+    } catch (error) {
+      if (error.code !== 'GIF_NAME_COLLISION' || !createAlternativeName) throw error;
+      console.warn(`[conversion] GIF name ${name} already exists; asking the model for different words.`);
+      name = await createAlternativeName(usedNames);
+      if (!name || usedNames.includes(name)) {
+        throw new Error('Vision model did not provide a different GIF name.');
+      }
+      usedNames.push(name);
+    }
+  }
+
+  if (!savedGif) throw new Error('Could not allocate a unique GIF name after retries.');
+
   try {
     const response = await fetch(editUrl, {
       method: 'PATCH',
@@ -515,18 +536,28 @@ async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress, 
   let previousAttemptSeconds = estimatedSeconds;
   const createVideoAttempt = async () => {
     const attemptStartedAt = Date.now();
-    const gifBuffer = await createVideoGif(sourcePath, scale, (processedSeconds) => {
-      if (!metadata?.duration || processedSeconds <= 0) return;
+    try {
+      const gifBuffer = await createVideoGif(sourcePath, scale, (processedSeconds) => {
+        if (!metadata?.duration || processedSeconds <= 0) return;
 
-      const attemptElapsedSeconds = (Date.now() - attemptStartedAt) / 1000;
-      if (attemptElapsedSeconds <= 0) return;
+        const attemptElapsedSeconds = (Date.now() - attemptStartedAt) / 1000;
+        if (attemptElapsedSeconds <= 0) return;
 
-      const processingRate = processedSeconds / attemptElapsedSeconds;
-      const remainingVideoSeconds = Math.max(0, metadata.duration - processedSeconds);
-      progress.setEta(remainingVideoSeconds / processingRate);
-    });
-    previousAttemptSeconds = (Date.now() - attemptStartedAt) / 1000;
-    return gifBuffer;
+        const processingRate = processedSeconds / attemptElapsedSeconds;
+        const remainingVideoSeconds = Math.max(0, metadata.duration - processedSeconds);
+        progress.setEta(remainingVideoSeconds / processingRate);
+      });
+      previousAttemptSeconds = (Date.now() - attemptStartedAt) / 1000;
+      return gifBuffer;
+    } catch (error) {
+      if (error.code === 'GIF_TOO_LARGE' && scale > MIN_VIDEO_SCALE) {
+        scale = nextScale(scale, error.size, maxGifSize);
+        console.warn(`[conversion] Retrying video at ${Math.round(scale * 100)}% after live size limit.`);
+        await progress.update(`GIF exceeded ${formatBytes(maxGifSize)}; retrying at ${Math.round(scale * 100)}% resolution…`);
+        return createVideoAttempt();
+      }
+      throw error;
+    }
   };
 
   let gifBuffer = await createVideoAttempt();
@@ -541,7 +572,12 @@ async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress, 
   const gifName = await createGifName(sourcePath, true, metadata);
   if (linkMode) {
     await progress.pause();
-    const url = await publishGifLink(editUrl, gifBuffer, gifName);
+    const url = await publishGifLink(
+      editUrl,
+      gifBuffer,
+      gifName,
+      (avoidNames) => createGifName(sourcePath, true, metadata, avoidNames),
+    );
     console.log(`[conversion] Permanent video GIF published at ${url}.`);
     return;
   }
@@ -585,6 +621,7 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress, 
 
   let startedAt = Date.now();
   let gifBuffer = await createGif(sourcePath, width, height);
+  console.log(`[conversion] Current GIF size: ${formatBytes(gifBuffer.length)}.`);
   let previousAttemptSeconds = (Date.now() - startedAt) / 1000;
 
   while (gifBuffer.length > maxGifSize && (width > MIN_DIMENSION || height > MIN_DIMENSION)) {
@@ -592,13 +629,19 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress, 
     await progress.update('GIF is larger than target; reducing image resolution…', previousAttemptSeconds);
     startedAt = Date.now();
     gifBuffer = await createGif(sourcePath, width, height);
+    console.log(`[conversion] Current GIF size: ${formatBytes(gifBuffer.length)}.`);
     previousAttemptSeconds = (Date.now() - startedAt) / 1000;
   }
 
   const gifName = await createGifName(sourcePath, false, metadata);
   if (linkMode) {
     await progress.pause();
-    const url = await publishGifLink(editUrl, gifBuffer, gifName);
+    const url = await publishGifLink(
+      editUrl,
+      gifBuffer,
+      gifName,
+      (avoidNames) => createGifName(sourcePath, false, metadata, avoidNames),
+    );
     console.log(`[conversion] Permanent image GIF published at ${url}.`);
     return;
   }
@@ -618,6 +661,7 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress, 
       await progress.update('Discord rejected the GIF; reducing image resolution…', previousAttemptSeconds);
       startedAt = Date.now();
       gifBuffer = await createGif(sourcePath, width, height);
+      console.log(`[conversion] Current GIF size: ${formatBytes(gifBuffer.length)}.`);
       previousAttemptSeconds = (Date.now() - startedAt) / 1000;
     }
   }
