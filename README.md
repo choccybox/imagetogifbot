@@ -46,7 +46,7 @@ or run locally with `node .`.
 5. Set the service type to **HTTP** and the service URL to:
 
    ```text
-   http://host.docker.internal:8787
+   http://host.docker.internal:6769
    ```
 
 The Compose file uses Docker's built-in `bridge` network instead of creating a

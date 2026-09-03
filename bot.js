@@ -11,7 +11,7 @@ const { verifyKeyMiddleware, InteractionType, InteractionResponseType } = requir
 const sharp = require('sharp');
 
 const APP_ID = process.env.DISCORD_APP_ID;
-const PORT = process.env.PORT || 6769;
+const PORT = process.env.PORT || process.env.APP_PORT || 6769;
 const TARGET_GIF_BYTES = 10 * 1024 * 1024;
 const MIN_DIMENSION = 1;
 const MIN_VIDEO_SCALE = 0.05;

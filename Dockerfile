@@ -17,6 +17,6 @@ RUN mkdir -p /app/temp /app/gifs && chown -R node:node /app
 
 USER node
 
-EXPOSE 8787
+EXPOSE 6769
 
 CMD ["node", "bot.js"]
