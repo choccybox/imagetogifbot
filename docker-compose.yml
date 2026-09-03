@@ -1,3 +1,5 @@
+name: giffy
+
 services:
   bot:
     build: .
@@ -10,6 +12,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./temp:/app/temp
+      - ./gifs:/app/gifs
 
   cloudflared:
     image: cloudflare/cloudflared:latest

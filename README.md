@@ -1,7 +1,8 @@
-# Image to GIF Discord Bot
+# Giffy
 
-Converts a message attachment to a GIF. The bot posts only the completed GIF;
-conversion progress and errors are logged by the container.
+Giffy converts a message attachment to a GIF. `To GIF` posts the completed attachment,
+while `To GIF (priv)` privately returns a permanent `https://gifs.chocbox.org`
+link named from the GIF's visual content. Conversion progress and errors are logged by the container.
 
 ## Quick start
 
@@ -41,7 +42,7 @@ or run locally with `node .`.
 1. Open **Cloudflare Zero Trust** → **Networks** → **Tunnels**.
 2. Create a **Cloudflared** tunnel and choose **Docker** as the connector type.
 3. Copy the tunnel token. Keep it secret.
-4. Add a **Public Hostname** to that tunnel, for example `gif.example.com`.
+4. Add the **Public Hostname** `gifs.chocbox.org` to that tunnel.
 5. Set the service type to **HTTP** and the service URL to:
 
    ```text
@@ -49,9 +50,9 @@ or run locally with `node .`.
    ```
 
 The Compose file uses Docker's built-in `bridge` network instead of creating a
-project network. The bot publishes port `8787` on the host, so it is reachable
-from `http://localhost:8787` and from your LAN IP, such as
-`http://192.168.100.33:8787`. The Cloudflared container reaches it through
+project network. The bot publishes port `6769` on the host, so it is reachable
+from `http://localhost:6769` and from your LAN IP, such as
+`http://192.168.100.33:6769`. The Cloudflared container reaches it through
 Docker's `host.docker.internal` gateway.
 
 ### 4. Configure environment variables
@@ -69,6 +70,8 @@ DISCORD_PUBLIC_KEY=your_discord_public_key
 DISCORD_APP_ID=your_discord_application_id
 DISCORD_BOT_TOKEN=your_discord_bot_token
 CLOUDFLARE_TUNNEL_TOKEN=your_cloudflare_tunnel_token
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=minimax/minimax-m3:free
 ```
 
 Never commit `.env` or expose the tunnel token.
@@ -103,27 +106,58 @@ In the Discord Developer Portal, open **General Information** and set the
 **Interactions Endpoint URL** to:
 
 ```text
-https://gif.example.com/interactions
+https://gifs.chocbox.org/interactions
 ```
 
-Replace `gif.example.com` with the public hostname created in Cloudflare. Discord
-will send a verification request; the endpoint must return successfully before
-Discord saves it.
+Discord will send a verification request; the endpoint must return successfully
+before Discord saves it.
 
 ## Use
 
-Right-click a Discord message with an image or video attachment, then select
-**Apps** → **To GIF**. The only channel message sent by the bot is the completed
-GIF.
+Right-click a Discord message with an image or video attachment, then choose:
+
+- **Apps** → **To GIF** to post the completed GIF publicly.
+- **Apps** → **To GIF (priv)** to receive an ephemeral message containing a
+  permanent link such as
+  `https://gifs.chocbox.org/gifs/bright-cloud-otter.gif`.
+
+Run `npm run register` or the documented Docker registration command again after
+updating so Discord installs both commands.
 
 ## Operations
 
 - Source files are streamed to the project-local `temp/` directory and removed
-  after conversion. The Compose file mounts that directory into the bot
-  container. The bot container runs as root so it can write to that bind mount
-  reliably on Windows Docker Desktop.
+  after conversion. Permanent linked GIFs are stored under `gifs/`. Compose
+  mounts both directories into the bot container so links survive restarts.
+- Every GIF gets a three-word filename. Private links use an atomic collision
+  check before saving, and files are served with long-lived immutable cache
+  headers.
+- When `OPENROUTER_API_KEY` is configured, the bot sends the first frame to
+  `minimax/minimax-m3:free` and asks for up to five distinct visual feature tags.
+  The first three valid tags become the filename. Without a key or when the
+  model is unavailable, it falls back to local random words.
+- The bot container runs as root so it can write to the Windows Docker Desktop
+  bind mounts reliably.
 - The Docker image includes FFmpeg and FFprobe for video conversion.
 - GIFs target a maximum size of 10 MB; the bot estimates a starting resolution
   before conversion and retries at lower resolutions when needed.
 - Tail conversion logs with `docker compose logs -f bot`.
 - Stop the stack with `docker compose down`.
+
+## Vision-based names
+
+Vision naming is enabled when `OPENROUTER_API_KEY` is set in `.env`. The bot
+extracts only the first frame, including for videos, and asks
+`minimax/minimax-m3:free` for up to five distinct lowercase feature tags. The
+first three tags are used in the filename. If the key, model, or request is
+unavailable, it falls back to local random words.
+
+Good free alternatives to test through OpenRouter are:
+
+- [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) — automatically routes to an available free model that supports the requested image capability.
+- [`minimax/minimax-m3:free`](https://openrouter.ai/minimax/minimax-m3:free) — currently listed as free and supports image and video input.
+- Google Gemma multimodal free listings — check the [current OpenRouter free collection](https://openrouter.ai/collections/free-models) because model IDs, availability, and limits change.
+
+Free routing is not guaranteed availability, and frames are sent to the
+selected provider when vision naming is enabled. Keep the API key private and
+validate any model change against the three-word filename rules.

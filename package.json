@@ -1,5 +1,5 @@
 {
-  "name": "discord-image-to-gif",
+  "name": "giffy",
   "version": "1.0.0",
   "private": true,
   "main": "bot.js",

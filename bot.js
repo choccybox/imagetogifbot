@@ -1,9 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const { randomUUID } = require('node:crypto');
+const { randomInt, randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { createWriteStream } = require('node:fs');
-const { chmod, mkdir, rm, stat } = require('node:fs/promises');
+const { chmod, mkdir, rm, stat, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
@@ -11,14 +11,51 @@ const { verifyKeyMiddleware, InteractionType, InteractionResponseType } = requir
 const sharp = require('sharp');
 
 const APP_ID = process.env.DISCORD_APP_ID;
-const PORT = process.env.PORT || 8787;
+const PORT = process.env.PORT || 6769;
 const TARGET_GIF_BYTES = 10 * 1024 * 1024;
 const MIN_DIMENSION = 1;
 const MIN_VIDEO_SCALE = 0.05;
 const VIDEO_FPS = 15;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
 const TEMP_DIR = join(__dirname, 'temp');
+const GIF_DIR = join(__dirname, 'gifs');
+const LINK_COMMAND_NAME = 'To GIF (priv)';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'minimax/minimax-m3:free';
+const FIRST_WORDS = [
+  'amber', 'ancient', 'autumn', 'bright', 'calm', 'cosmic', 'crimson', 'dancing',
+  'electric', 'emerald', 'flying', 'frozen', 'gentle', 'golden', 'hidden', 'icy',
+  'jolly', 'lively', 'lucky', 'lunar', 'misty', 'neon', 'quiet', 'rapid',
+  'royal', 'silver', 'solar', 'sparkling', 'swift', 'tiny', 'velvet', 'wild',
+];
+const SECOND_WORDS = [
+  'apple', 'bamboo', 'blossom', 'canyon', 'cedar', 'cherry', 'cloud', 'comet',
+  'coral', 'crystal', 'dawn', 'ember', 'forest', 'galaxy', 'harbor', 'honey',
+  'island', 'jungle', 'lagoon', 'maple', 'meadow', 'midnight', 'ocean', 'peach',
+  'pepper', 'river', 'shadow', 'sky', 'storm', 'sunset', 'thunder', 'willow',
+];
+const THIRD_WORDS = [
+  'badger', 'bear', 'bird', 'bison', 'butterfly', 'cat', 'cobra', 'dolphin',
+  'dragon', 'eagle', 'falcon', 'fox', 'gecko', 'heron', 'koala', 'leopard',
+  'lion', 'lynx', 'otter', 'owl', 'panda', 'penguin', 'phoenix', 'rabbit',
+  'raven', 'shark', 'sparrow', 'tiger', 'turtle', 'whale', 'wolf', 'zebra',
+];
+const GENERIC_FEATURE_WORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'with', 'this', 'that', 'image', 'picture', 'photo',
+  'scene', 'background', 'foreground', 'thing', 'object', 'person', 'people', 'man',
+  'woman', 'human', 'face', 'head', 'hair', 'beard', 'eye', 'eyes', 'hand', 'hands',
+  'body', 'shirt', 'clothing', 'clothes', 'outfit', 'skin', 'black', 'white', 'gray',
+  'grey', 'red', 'blue', 'green', 'yellow', 'orange', 'purple', 'pink', 'brown',
+  'blonde', 'color', 'colored', 'large', 'small', 'big', 'little', 'young', 'old',
+  'beautiful', 'standing', 'sitting', 'looking', 'holding', 'wearing', 'expression',
+  'happy', 'sad', 'serious', 'stern', 'text', 'overlay', 'caption', 'words', 'logo',
+  'tag1', 'tag2', 'tag3', 'tag4', 'tag5', 'feature', 'features', 'unknown',
+]);
 
 const app = express();
+app.use('/gifs', express.static(GIF_DIR, {
+  immutable: true,
+  maxAge: '1y',
+}));
 
 function isGifAttachment(attachment) {
   return attachment.content_type?.toLowerCase() === 'image/gif'
@@ -41,6 +78,20 @@ function formatDuration(seconds) {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;
   return `${Math.floor(rounded / 60)}m ${rounded % 60}s`;
+}
+
+function randomGifName() {
+  return [
+    FIRST_WORDS[randomInt(FIRST_WORDS.length)],
+    SECOND_WORDS[randomInt(SECOND_WORDS.length)],
+    THIRD_WORDS[randomInt(THIRD_WORDS.length)],
+  ].join('-');
+}
+
+function normalizeGifName(value) {
+  const words = (String(value || '').toLowerCase().match(/[a-z0-9]+/g) || [])
+    .filter((word) => !GENERIC_FEATURE_WORDS.has(word));
+  return words.length >= 3 ? words.slice(0, 3).join('-') : null;
 }
 
 function initialScale(estimatedSize, targetSize) {
@@ -178,6 +229,126 @@ async function downloadAttachment(sourceUrl) {
   }
 }
 
+function extractVideoFrame(sourcePath, timestamp) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn(process.env.FFMPEG_PATH || 'ffmpeg', [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-ss', String(timestamp),
+      '-i', sourcePath,
+      '-frames:v', '1',
+      '-vf', 'scale=512:-2',
+      '-f', 'image2',
+      'pipe:1',
+    ]);
+    const output = [];
+    const errors = [];
+
+    ffmpeg.stdout.on('data', (chunk) => output.push(chunk));
+    ffmpeg.stderr.on('data', (chunk) => errors.push(chunk));
+    ffmpeg.on('error', (error) => reject(error));
+    ffmpeg.on('close', (code) => {
+      if (code === 0 && output.length) {
+        resolve(Buffer.concat(output));
+        return;
+      }
+      reject(new Error(Buffer.concat(errors).toString().trim() || 'Could not extract video frame.'));
+    });
+  });
+}
+
+async function requestVisionName(frames) {
+  if (!process.env.OPENROUTER_API_KEY) return null;
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://gifs.chocbox.org',
+      'X-Title': 'Giffy',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      temperature: 0.2,
+      max_tokens: 20,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'Identify up to five highly distinctive visual features in this frame. Focus on unusual objects, symbols, creatures, landmarks, actions, or props that make this image recognizable. Ignore generic people, faces, hair, beards, clothing, colors, body parts, common poses, emotions, backgrounds, captions, logos, and text overlays. Return only up to five concise lowercase single-word tags separated by spaces. Do not write a sentence or explanation. At least three tags are preferred because the first three valid tags become a filename.',
+          },
+          ...frames.map((frame) => ({
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${frame.toString('base64')}` },
+          })),
+        ],
+      }],
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`OpenRouter request failed (${response.status}).`);
+  }
+
+  const result = await response.json();
+  const content = result.choices?.[0]?.message?.content;
+  return normalizeGifName(typeof content === 'string' ? content : '');
+}
+
+async function createGifName(sourcePath, isVideo, metadata) {
+  if (process.env.OPENROUTER_API_KEY) {
+    try {
+      let frames;
+      if (isVideo) {
+        // Use only the first frame for stable, fast video naming.
+        frames = [await extractVideoFrame(sourcePath, 0)];
+      } else {
+        const frame = await sharp(sourcePath).resize({ width: 512, withoutEnlargement: true }).jpeg().toBuffer();
+        frames = [frame];
+      }
+
+      const visionName = await requestVisionName(frames);
+      if (visionName) {
+        console.log(`[conversion] Vision model suggested GIF name: ${visionName}.`);
+        return visionName;
+      }
+      console.warn('[conversion] Vision model returned an invalid name; using a random name.');
+    } catch (error) {
+      console.warn(`[conversion] Vision naming unavailable: ${error.message}`);
+    }
+  }
+
+  return randomGifName();
+}
+
+async function savePermanentGif(gifBuffer, preferredName) {
+  await mkdir(GIF_DIR, { recursive: true, mode: 0o777 });
+  try {
+    await chmod(GIF_DIR, 0o777);
+  } catch (error) {
+    console.warn(`[conversion] Could not chmod GIF directory: ${error.message}`);
+  }
+
+  const preferredSlug = normalizeGifName(preferredName);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const slug = attempt === 0 && preferredSlug ? preferredSlug : randomGifName();
+    const gifPath = join(GIF_DIR, `${slug}.gif`);
+
+    try {
+      await writeFile(gifPath, gifBuffer, { flag: 'wx' });
+      return {
+        gifPath,
+        url: `${PUBLIC_BASE_URL}/gifs/${slug}.gif`,
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+  }
+
+  throw new Error('Could not allocate a unique three-word GIF name.');
+}
+
 async function createGif(sourcePath, width, height) {
   return sharp(sourcePath)
     .resize({ width, height, fit: 'inside', withoutEnlargement: true })
@@ -270,10 +441,28 @@ function probeVideo(sourcePath) {
   });
 }
 
-async function uploadGif(editUrl, gifBuffer) {
+async function publishGifLink(editUrl, gifBuffer, preferredName) {
+  const savedGif = await savePermanentGif(gifBuffer, preferredName);
+  try {
+    const response = await fetch(editUrl, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: savedGif.url }),
+    });
+    if (!response.ok) {
+      throw new Error(`Discord link response failed (${response.status}): ${await response.text()}`);
+    }
+    return savedGif.url;
+  } catch (error) {
+    await rm(savedGif.gifPath, { force: true });
+    throw error;
+  }
+}
+
+async function uploadGif(editUrl, gifBuffer, filename) {
   const form = new FormData();
   form.append('payload_json', JSON.stringify({ content: '' }));
-  form.append('file', new Blob([gifBuffer], { type: 'image/gif' }), 'converted.gif');
+  form.append('file', new Blob([gifBuffer], { type: 'image/gif' }), filename);
 
   const response = await fetch(editUrl, { method: 'PATCH', body: form });
   if (response.ok) return;
@@ -306,7 +495,7 @@ async function deleteOriginalResponse(editUrl) {
   }
 }
 
-async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress) {
+async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress, linkMode) {
   let metadata;
   try {
     metadata = await probeVideo(sourcePath);
@@ -349,11 +538,19 @@ async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress) 
     gifBuffer = await createVideoAttempt();
   }
 
+  const gifName = await createGifName(sourcePath, true, metadata);
+  if (linkMode) {
+    await progress.pause();
+    const url = await publishGifLink(editUrl, gifBuffer, gifName);
+    console.log(`[conversion] Permanent video GIF published at ${url}.`);
+    return;
+  }
+
   while (true) {
     try {
       await progress.update('Uploading GIF…', 3);
       await progress.pause();
-      await uploadGif(editUrl, gifBuffer);
+      await uploadGif(editUrl, gifBuffer, `${gifName}.gif`);
       console.log(`[conversion] Video GIF uploaded in ${formatDuration(progress.elapsedSeconds())}.`);
       return;
     } catch (error) {
@@ -368,7 +565,7 @@ async function convertVideoAndUpload(editUrl, sourcePath, sourceSize, progress) 
   }
 }
 
-async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress) {
+async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress, linkMode) {
   await progress.update('Inspecting image…');
   const metadata = await sharp(sourcePath).metadata();
   if (!metadata.width || !metadata.height) {
@@ -398,10 +595,18 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress) 
     previousAttemptSeconds = (Date.now() - startedAt) / 1000;
   }
 
+  const gifName = await createGifName(sourcePath, false, metadata);
+  if (linkMode) {
+    await progress.pause();
+    const url = await publishGifLink(editUrl, gifBuffer, gifName);
+    console.log(`[conversion] Permanent image GIF published at ${url}.`);
+    return;
+  }
+
   while (true) {
     try {
       await progress.pause();
-      await uploadGif(editUrl, gifBuffer);
+      await uploadGif(editUrl, gifBuffer, `${gifName}.gif`);
       console.log(`[conversion] Image GIF uploaded in ${formatDuration(progress.elapsedSeconds())}.`);
       return;
     } catch (error) {
@@ -418,7 +623,7 @@ async function convertImageAndUpload(editUrl, sourcePath, sourceSize, progress) 
   }
 }
 
-async function convertAndUpload(token, sourceUrl, isVideo) {
+async function convertAndUpload(token, sourceUrl, isVideo, linkMode) {
   const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
   const progress = createProgressReporter(editUrl);
   let sourcePath;
@@ -429,9 +634,9 @@ async function convertAndUpload(token, sourceUrl, isVideo) {
     console.log(`[conversion] Downloaded ${formatBytes(download.size)} to temp/${sourcePath.split(/[\\/]/).pop()}.`);
 
     if (isVideo) {
-      await convertVideoAndUpload(editUrl, sourcePath, download.size, progress);
+      await convertVideoAndUpload(editUrl, sourcePath, download.size, progress, linkMode);
     } else {
-      await convertImageAndUpload(editUrl, sourcePath, download.size, progress);
+      await convertImageAndUpload(editUrl, sourcePath, download.size, progress, linkMode);
     }
   } catch (error) {
     console.error('[conversion] Conversion failed:', error);
@@ -458,12 +663,16 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
 
   if (interaction.type === InteractionType.APPLICATION_COMMAND) {
     const { data, token } = interaction;
+    const linkMode = data.name === LINK_COMMAND_NAME;
     const message = data.resolved.messages[data.target_id];
     const attachments = message.attachments || [];
     const attachment = attachments.find((candidate) => !isGifAttachment(candidate));
 
     if (!attachment) {
-      res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+      res.send({
+        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+        ...(linkMode ? { data: { flags: 64 } } : {}),
+      });
       setImmediate(() => {
         const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
         deleteOriginalResponse(editUrl);
@@ -471,11 +680,14 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
       return;
     }
 
-    console.log('[interaction] Deferring conversion response.');
-    res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+    console.log(`[interaction] Deferring ${linkMode ? 'private link' : 'public attachment'} conversion response.`);
+    res.send({
+      type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+      ...(linkMode ? { data: { flags: 64 } } : {}),
+    });
 
     setImmediate(() => {
-      convertAndUpload(token, attachment.url, isVideoAttachment(attachment))
+      convertAndUpload(token, attachment.url, isVideoAttachment(attachment), linkMode)
         .catch((error) => console.error('[conversion] Unexpected conversion error:', error));
     });
     return;
