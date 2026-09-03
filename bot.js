@@ -654,25 +654,42 @@ async function convertAndUpload(token, sourceUrl, isVideo, linkMode) {
   }
 }
 
+app.use('/interactions', (req, res, next) => {
+  const startedAt = Date.now();
+  console.log(`[http] ${req.method} ${req.originalUrl}`);
+  res.on('finish', () => {
+    console.log(`[http] ${req.method} ${req.originalUrl} -> ${res.statusCode} in ${Date.now() - startedAt}ms`);
+  });
+  next();
+});
+
 app.get('/', (_req, res) => res.send('Giffy is running.'));
 app.get('/interactions', (_req, res) => res.send('Giffy interactions endpoint is running. Discord uses POST requests here.'));
 
 app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (req, res) => {
-  const interaction = req.body;
+  const interaction = req.body || {};
 
   if (interaction.type === InteractionType.PING) {
-    return res.send({ type: InteractionResponseType.PONG });
+    return res.status(200).json({ type: InteractionResponseType.PONG });
   }
 
   if (interaction.type === InteractionType.APPLICATION_COMMAND) {
-    const { data, token } = interaction;
+    const { data = {}, token } = interaction;
     const linkMode = data.name === LINK_COMMAND_NAME;
-    const message = data.resolved.messages[data.target_id];
+    const message = data.resolved?.messages?.[data.target_id];
+    if (!message) {
+      res.status(200).json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+      setImmediate(() => {
+        const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
+        deleteOriginalResponse(editUrl);
+      });
+      return;
+    }
     const attachments = message.attachments || [];
     const attachment = attachments.find((candidate) => !isGifAttachment(candidate));
 
     if (!attachment) {
-      res.send({
+      res.status(200).json({
         type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         ...(linkMode ? { data: { flags: 64 } } : {}),
       });
@@ -684,7 +701,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
     }
 
     console.log(`[interaction] Deferring ${linkMode ? 'private link' : 'public attachment'} conversion response.`);
-    res.send({
+    res.status(200).json({
       type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
       ...(linkMode ? { data: { flags: 64 } } : {}),
     });
@@ -696,11 +713,16 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
     return;
   }
 
-  res.send({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
+  res.status(200).json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
   setImmediate(() => {
     const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${interaction.token}/messages/@original`;
     deleteOriginalResponse(editUrl);
   });
+});
+
+app.use((error, _req, res, _next) => {
+  console.error('[http] Interaction handler failed:', error);
+  if (!res.headersSent) res.status(500).json({ error: 'Internal interaction error.' });
 });
 
 app.listen(PORT, () => console.log(`listening on ${PORT}`));
