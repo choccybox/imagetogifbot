@@ -1,7 +1,7 @@
 # Giffy
 
 Giffy converts a message attachment to a GIF. `To GIF` posts the completed attachment,
-while `To GIF (priv)` privately returns a permanent `https://gifs.chocbox.org`
+while `To GIF (priv)` privately returns a permanent `https://gif.chocbox.org`
 link named from the GIF's visual content. Conversion progress and errors are logged by the container.
 
 ## Quick start
@@ -42,7 +42,7 @@ or run locally with `node .`.
 1. Open **Cloudflare Zero Trust** → **Networks** → **Tunnels**.
 2. Create a **Cloudflared** tunnel and choose **Docker** as the connector type.
 3. Copy the tunnel token. Keep it secret.
-4. Add the **Public Hostname** `gifs.chocbox.org` to that tunnel.
+4. Add the **Public Hostname** `gif.chocbox.org` to that tunnel.
 5. Set the service type to **HTTP** and the service URL to:
 
    ```text
@@ -106,7 +106,7 @@ In the Discord Developer Portal, open **General Information** and set the
 **Interactions Endpoint URL** to:
 
 ```text
-https://gifs.chocbox.org/interactions
+https://gif.chocbox.org/interactions
 ```
 
 Discord will send a verification request; the endpoint must return successfully
@@ -119,7 +119,7 @@ Right-click a Discord message with an image or video attachment, then choose:
 - **Apps** → **To GIF** to post the completed GIF publicly.
 - **Apps** → **To GIF (priv)** to receive an ephemeral message containing a
   permanent link such as
-  `https://gifs.chocbox.org/gifs/bright-cloud-otter.gif`.
+  `https://gif.chocbox.org/gifs/bright-cloud-otter.gif`.
 
 Run `npm run register` or the documented Docker registration command again after
 updating so Discord installs both commands.

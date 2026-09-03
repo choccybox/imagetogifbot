@@ -16,7 +16,7 @@ const TARGET_GIF_BYTES = 10 * 1024 * 1024;
 const MIN_DIMENSION = 1;
 const MIN_VIDEO_SCALE = 0.05;
 const VIDEO_FPS = 15;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL;
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://gif.chocbox.org';
 const TEMP_DIR = join(__dirname, 'temp');
 const GIF_DIR = join(__dirname, 'gifs');
 const LINK_COMMAND_NAME = 'To GIF (priv)';
@@ -265,7 +265,7 @@ async function requestVisionName(frames) {
     headers: {
       Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://gifs.chocbox.org',
+      'HTTP-Referer': 'https://gif.chocbox.org',
       'X-Title': 'Giffy',
     },
     body: JSON.stringify({
