@@ -654,6 +654,9 @@ async function convertAndUpload(token, sourceUrl, isVideo, linkMode) {
   }
 }
 
+app.get('/', (_req, res) => res.send('Giffy is running.'));
+app.get('/interactions', (_req, res) => res.send('Giffy interactions endpoint is running. Discord uses POST requests here.'));
+
 app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (req, res) => {
   const interaction = req.body;
 
