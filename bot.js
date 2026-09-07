@@ -20,6 +20,7 @@ const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://gif.chocbox.org'
 const TEMP_DIR = join(__dirname, 'temp');
 const GIF_DIR = join(__dirname, 'gifs');
 const LINK_COMMAND_NAME = 'To GIF (priv)';
+const SLASH_COMMAND_NAME = 'gif';
 const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'minimax/minimax-m3:free';
 const FIRST_WORDS = [
   'amber', 'ancient', 'autumn', 'bright', 'calm', 'cosmic', 'crimson', 'dancing',
@@ -65,6 +66,16 @@ function isGifAttachment(attachment) {
 function isVideoAttachment(attachment) {
   return attachment.content_type?.toLowerCase().startsWith('video/')
     || /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(attachment.filename || '');
+}
+
+function isImageAttachment(attachment) {
+  return attachment.content_type?.toLowerCase().startsWith('image/')
+    || /\.(avif|bmp|gif|heic|jpe?g|png|tiff?|webp)$/i.test(attachment.filename || '');
+}
+
+function getSlashCommandAttachment(data) {
+  const attachmentId = data.options?.find((option) => option.name === 'file')?.value;
+  return attachmentId ? data.resolved?.attachments?.[attachmentId] : null;
 }
 
 function formatBytes(bytes) {
@@ -719,27 +730,23 @@ app.post('/interactions', verifyKeyMiddleware(process.env.DISCORD_PUBLIC_KEY), (
 
   if (interaction.type === InteractionType.APPLICATION_COMMAND) {
     const { data = {}, token } = interaction;
+    const isSlashCommand = data.name === SLASH_COMMAND_NAME;
     const linkMode = data.name === LINK_COMMAND_NAME;
     const message = data.resolved?.messages?.[data.target_id];
-    if (!message) {
-      res.status(200).json({ type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE });
-      setImmediate(() => {
-        const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
-        deleteOriginalResponse(editUrl);
-      });
-      return;
-    }
-    const attachments = message.attachments || [];
-    const attachment = attachments.find((candidate) => !isGifAttachment(candidate));
+    const attachment = isSlashCommand
+      ? getSlashCommandAttachment(data)
+      : message?.attachments?.find((candidate) => !isGifAttachment(candidate)
+        && (isImageAttachment(candidate) || isVideoAttachment(candidate)));
 
-    if (!attachment) {
+    if (!attachment || (!isImageAttachment(attachment) && !isVideoAttachment(attachment))) {
       res.status(200).json({
-        type: InteractionResponseType.DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-        ...(linkMode ? { data: { flags: 64 } } : {}),
-      });
-      setImmediate(() => {
-        const editUrl = `https://discord.com/api/v10/webhooks/${APP_ID}/${token}/messages/@original`;
-        deleteOriginalResponse(editUrl);
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: isSlashCommand
+            ? 'Choose an image or video attachment to convert.'
+            : 'The selected message does not contain an image or video attachment to convert.',
+          flags: 64,
+        },
       });
       return;
     }

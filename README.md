@@ -76,7 +76,7 @@ OPENROUTER_MODEL=minimax/minimax-m3:free
 
 Never commit `.env` or expose the tunnel token.
 
-### 5. Register the context-menu command
+### 5. Register the commands
 
 Build the image, then register the command once:
 
@@ -114,7 +114,12 @@ before Discord saves it.
 
 ## Use
 
-Right-click a Discord message with an image or video attachment, then choose:
+Use the slash command to upload media directly:
+
+- `/gif file:<image-or-video>` posts the completed GIF publicly.
+
+You can also right-click a Discord message with an image or video attachment,
+then choose:
 
 - **Apps** → **To GIF** to post the completed GIF publicly.
 - **Apps** → **To GIF (priv)** to receive an ephemeral message containing a
@@ -122,7 +127,7 @@ Right-click a Discord message with an image or video attachment, then choose:
   `https://gif.chocbox.org/gifs/bright-cloud-otter.gif`.
 
 Run `npm run register` or the documented Docker registration command again after
-updating so Discord installs both commands.
+updating so Discord installs all three commands.
 
 ## Operations
 
