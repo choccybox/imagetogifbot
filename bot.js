@@ -21,7 +21,8 @@ const TEMP_DIR = join(__dirname, 'temp');
 const GIF_DIR = join(__dirname, 'gifs');
 const LINK_COMMAND_NAME = 'To GIF (priv)';
 const SLASH_COMMAND_NAME = 'gif';
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'minimax/minimax-m3:free';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const FIRST_WORDS = [
   'amber', 'ancient', 'autumn', 'bright', 'calm', 'cosmic', 'crimson', 'dancing',
   'electric', 'emerald', 'flying', 'frozen', 'gentle', 'golden', 'hidden', 'icy',
@@ -221,47 +222,49 @@ function extractVideoFrame(sourcePath, timestamp) {
   });
 }
 
-async function requestVisionName(frames, avoidNames = []) {
-  if (!process.env.OPENROUTER_API_KEY) return null;
+const NAMING_PROMPT = `Identify up to five highly distinctive visual features in this frame. Focus on unusual objects, symbols, creatures, landmarks, actions, or props that make this image recognizable. Ignore generic people, faces, hair, beards, clothing, colors, body parts, common poses, emotions, backgrounds, captions, logos, and text overlays. Return only up to five concise lowercase single-word tags separated by spaces. Do not write a sentence or explanation. At least three tags are preferred because the first three valid tags become a filename.`;
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+async function requestVisionName(frames, avoidNames = []) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+
+  const prompt = `${NAMING_PROMPT}${avoidNames.length ? ` Do not use any words from these rejected names: ${avoidNames.join(', ')}.` : ''}`;
+  const response = await fetch(`${GEMINI_API_URL}/${GEMINI_MODEL}:generateContent`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+      'x-goog-api-key': apiKey,
       'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://gif.chocbox.org',
-      'X-Title': 'Giffy',
     },
     body: JSON.stringify({
-      model: OPENROUTER_MODEL,
-      temperature: 0.2,
-      max_tokens: 20,
-      messages: [{
+      contents: [{
         role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: `Identify up to five highly distinctive visual features in this frame. Focus on unusual objects, symbols, creatures, landmarks, actions, or props that make this image recognizable. Ignore generic people, faces, hair, beards, clothing, colors, body parts, common poses, emotions, backgrounds, captions, logos, and text overlays. Return only up to five concise lowercase single-word tags separated by spaces. Do not write a sentence or explanation. At least three tags are preferred because the first three valid tags become a filename.${avoidNames.length ? ` Do not use any words from these rejected names: ${avoidNames.join(', ')}.` : ''}`, 
-          },
+        parts: [
+          { text: prompt },
           ...frames.map((frame) => ({
-            type: 'image_url',
-            image_url: { url: `data:image/jpeg;base64,${frame.toString('base64')}` },
+            inline_data: { mime_type: 'image/jpeg', data: frame.toString('base64') },
           })),
         ],
       }],
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 64,
+        responseMimeType: 'text/plain',
+      },
     }),
   });
   if (!response.ok) {
-    throw new Error(`OpenRouter request failed (${response.status}).`);
+    throw new Error(`Gemini request failed (${response.status}).`);
   }
 
   const result = await response.json();
-  const content = result.choices?.[0]?.message?.content;
+  const content = result.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text)
+    .join('');
   return normalizeGifName(typeof content === 'string' ? content : '');
 }
 
 async function createGifName(sourcePath, isVideo, metadata, avoidNames = []) {
-  if (process.env.OPENROUTER_API_KEY) {
+  if (process.env.GEMINI_API_KEY) {
     try {
       let frames;
       if (isVideo) {

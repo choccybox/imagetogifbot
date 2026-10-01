@@ -70,8 +70,8 @@ DISCORD_PUBLIC_KEY=your_discord_public_key
 DISCORD_APP_ID=your_discord_application_id
 DISCORD_BOT_TOKEN=your_discord_bot_token
 CLOUDFLARE_TUNNEL_TOKEN=your_cloudflare_tunnel_token
-OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=minimax/minimax-m3:free
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
 Never commit `.env` or expose the tunnel token.
@@ -137,8 +137,8 @@ updating so Discord installs all three commands.
 - Every GIF gets a three-word filename. Private links use an atomic collision
   check before saving, and files are served with long-lived immutable cache
   headers.
-- When `OPENROUTER_API_KEY` is configured, the bot sends the first frame to
-  `minimax/minimax-m3:free` and asks for up to five distinct visual feature tags.
+- When `GEMINI_API_KEY` is configured, the bot sends the first frame to
+  `gemini-3.5-flash-lite` and asks for up to five distinct visual feature tags.
   The first three valid tags become the filename. Without a key or when the
   model is unavailable, it falls back to local random words.
 - The bot container runs as root so it can write to the Windows Docker Desktop
@@ -151,18 +151,49 @@ updating so Discord installs all three commands.
 
 ## Vision-based names
 
-Vision naming is enabled when `OPENROUTER_API_KEY` is set in `.env`. The bot
-extracts only the first frame, including for videos, and asks
-`minimax/minimax-m3:free` for up to five distinct lowercase feature tags. The
-first three tags are used in the filename. If the key, model, or request is
-unavailable, it falls back to local random words.
+Vision naming is enabled when `GEMINI_API_KEY` is set in `.env`. The bot
+extracts only the first frame, including for videos, and asks Google Gemini for
+up to five distinct lowercase feature tags. The first three tags are used in the
+filename. If the key, model, or request is unavailable, it falls back to local
+random words.
 
-Good free alternatives to test through OpenRouter are:
+Get an API key from [Google AI Studio](https://aistudio.google.com/apikey) and
+confirm the current model list with:
 
-- [`openrouter/free`](https://openrouter.ai/docs/guides/routing/routers/free-router) — automatically routes to an available free model that supports the requested image capability.
-- [`minimax/minimax-m3:free`](https://openrouter.ai/minimax/minimax-m3:free) — currently listed as free and supports image and video input.
-- Google Gemma multimodal free listings — check the [current OpenRouter free collection](https://openrouter.ai/collections/free-models) because model IDs, availability, and limits change.
+```powershell
+curl "https://generativelanguage.googleapis.com/v1beta/models?key=$env:GEMINI_API_KEY"
+```
 
-Free routing is not guaranteed availability, and frames are sent to the
-selected provider when vision naming is enabled. Keep the API key private and
-validate any model change against the three-word filename rules.
+### Benchmarking models
+
+`benchmark_models.js` sends the same prompt and frame to every vision-capable
+model, prints each request and raw response live, and ranks the survivors by
+median latency:
+
+```powershell
+npm run bench
+node benchmark_models.js path\to\image.jpg 5
+```
+
+Measured on 2026-10-01 against `test.jpg` with three runs per model, three
+models produced a valid three-word name:
+
+| Model | Median | Name |
+| --- | --- | --- |
+| `gemini-3.5-flash-lite` | 1120 ms | `diamond-magnifying-glass` |
+| `gemini-3.1-flash-lite` | 3025 ms | `diamond-loupe-magnifying` |
+| `gemini-flash-lite-latest` | 20453 ms | `diamond-monocle-magnifier` |
+
+`gemini-3.5-flash-lite` is the default because it is the fastest of the models
+that reliably satisfied the filename rules. Faster models such as
+`gemini-3.5-flash` and `gemini-3.6-flash` answered in under 2 s but replied with
+prose or bullet lists instead of bare tags, so the normalizer rejected them.
+
+Several models fail regardless of prompt: `gemini-2.5-pro` and
+`gemini-2.5-flash-lite` now return 404 for new users, the Pro and Omni preview
+models return 429 on a free tier, and `gemini-3.7-flash`, `gemini-3.8-flash`,
+and `gemini-flash-latest` return 503 under load. Re-run the benchmark before
+changing `GEMINI_MODEL`.
+
+Frames are sent to Google when vision naming is enabled. Keep the API key
+private and validate any model change against the three-word filename rules.
